@@ -266,6 +266,30 @@
       osc.stop(t + 0.46);
     }
 
+    function playFall() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const duration = 0.3;
+      const bufferSize = Math.floor(ctx.sampleRate * duration);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(2200, t);
+      filter.frequency.exponentialRampToValueAtTime(250, t + duration);
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(0.32, t);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + duration + 0.02);
+      src.connect(filter);
+      filter.connect(env);
+      env.connect(sfxGain);
+      src.start(t);
+      src.stop(t + duration + 0.03);
+    }
+
     function toggleMute() {
       ensure();
       muted = !muted;
@@ -273,7 +297,7 @@
       return muted;
     }
 
-    return { ensure, startMusic, playFlap, playScore, playDie, toggleMute };
+    return { ensure, startMusic, playFlap, playScore, playDie, playFall, toggleMute };
   })();
 
   const muteBtn = document.getElementById('mute-btn');
@@ -299,7 +323,10 @@
     bird = {
       y: H * 0.4,
       vy: 0,
-      rotation: 0
+      rotation: 0,
+      wingAngle: 0,
+      wingSpread: 0,
+      flapPhase: 0
     };
     pipes = [];
     score = 0;
@@ -352,9 +379,24 @@
     if (state !== 'playing') return;
 
     elapsedSinceStart += dt;
+    const wasRising = bird.vy < 0;
     bird.vy += GRAVITY * dt;
     bird.y += bird.vy * dt;
     bird.rotation = Math.max(-0.5, Math.min(1.2, bird.vy / 600));
+
+    const isRising = bird.vy < 0;
+    if (wasRising && !isRising) {
+      AudioEngine.playFall();
+    }
+    if (isRising) {
+      bird.flapPhase += dt * 24;
+      bird.wingAngle = Math.sin(bird.flapPhase) * 0.85;
+      bird.wingSpread += (1 - bird.wingSpread) * Math.min(1, dt * 14);
+    } else {
+      bird.flapPhase = 0;
+      bird.wingAngle += (0.15 - bird.wingAngle) * Math.min(1, dt * 10);
+      bird.wingSpread += (0.18 - bird.wingSpread) * Math.min(1, dt * 8);
+    }
 
     const groundY = H - 40;
     if (bird.y + BIRD_RADIUS > groundY) {
@@ -537,6 +579,21 @@
     ctx.ellipse(0, 0, BIRD_RADIUS * 1.15, BIRD_RADIUS, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+
+    // wing: flaps open while rising, folds flat against the body while falling
+    ctx.save();
+    ctx.translate(-BIRD_RADIUS * 0.05, -BIRD_RADIUS * 0.05);
+    ctx.rotate(bird.wingAngle);
+    const wingLen = BIRD_RADIUS * (0.6 + bird.wingSpread * 0.6);
+    const wingWid = BIRD_RADIUS * (0.3 + bird.wingSpread * 0.12);
+    ctx.fillStyle = '#f0b429';
+    ctx.strokeStyle = '#c98f14';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(-wingLen * 0.25, 0, wingLen, wingWid, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
 
     // rounded beak pointing right
     ctx.fillStyle = '#ff7a1a';
