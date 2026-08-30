@@ -417,16 +417,54 @@
     ctx.fillRect(0, 0, W, H);
   }
 
+  let brickPatternCache = null;
+  function getBrickPattern() {
+    if (brickPatternCache) return brickPatternCache;
+    const bw = 24, bh = 14, gap = 2;
+    const tile = document.createElement('canvas');
+    tile.width = bw * 2;
+    tile.height = bh * 2;
+    const tctx = tile.getContext('2d');
+
+    tctx.fillStyle = '#e3cda3';
+    tctx.fillRect(0, 0, tile.width, tile.height);
+
+    tctx.fillStyle = '#c1502f';
+    tctx.strokeStyle = '#8f3720';
+    tctx.lineWidth = 1;
+    const drawBrick = (x, y, w, h) => {
+      tctx.fillRect(x, y, w, h);
+      tctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+    };
+
+    // row A (aligned)
+    drawBrick(gap, gap, bw - gap * 2, bh - gap * 2);
+    drawBrick(bw + gap, gap, bw - gap * 2, bh - gap * 2);
+    // row B (offset half a brick for a running-bond pattern, wrapped at the tile edges)
+    drawBrick(0, bh + gap, bw / 2 - gap, bh - gap * 2);
+    drawBrick(bw / 2 + gap, bh + gap, bw - gap * 2, bh - gap * 2);
+    drawBrick(bw * 1.5 + gap, bh + gap, bw / 2 - gap, bh - gap * 2);
+
+    brickPatternCache = ctx.createPattern(tile, 'repeat');
+    return brickPatternCache;
+  }
+
   function drawPipes() {
-    ctx.fillStyle = '#5cc95c';
-    ctx.strokeStyle = '#3a9c3a';
+    const pattern = getBrickPattern();
+    ctx.strokeStyle = '#6e2c1a';
     ctx.lineWidth = 3;
     for (const pipe of pipes) {
       const gapTop = pipe.gapCenter - PIPE_GAP / 2;
       const gapBottom = pipe.gapCenter + PIPE_GAP / 2;
-      ctx.fillRect(pipe.x, 0, PIPE_WIDTH, gapTop);
+
+      ctx.save();
+      ctx.translate(pipe.x, 0);
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, PIPE_WIDTH, gapTop);
+      ctx.fillRect(0, gapBottom, PIPE_WIDTH, H - gapBottom);
+      ctx.restore();
+
       ctx.strokeRect(pipe.x, 0, PIPE_WIDTH, gapTop);
-      ctx.fillRect(pipe.x, gapBottom, PIPE_WIDTH, H - gapBottom);
       ctx.strokeRect(pipe.x, gapBottom, PIPE_WIDTH, H - gapBottom);
     }
   }
@@ -446,24 +484,48 @@
     ctx.save();
     ctx.translate(birdX, bird.y);
     ctx.rotate(bird.rotation);
+
+    // rubber-duck-style tail/wing bump at the back
+    ctx.fillStyle = '#f5c02e';
+    ctx.beginPath();
+    ctx.ellipse(-BIRD_RADIUS * 0.75, -BIRD_RADIUS * 0.1, BIRD_RADIUS * 0.55, BIRD_RADIUS * 0.65, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // body, facing right
     ctx.fillStyle = '#ffd23f';
     ctx.strokeStyle = '#e0a800';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI * 2);
+    ctx.ellipse(0, 0, BIRD_RADIUS * 1.15, BIRD_RADIUS, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#333';
+
+    // rounded beak pointing right
+    ctx.fillStyle = '#ff7a1a';
+    ctx.strokeStyle = '#d9600a';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(6, -4, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#ff8c1a';
-    ctx.beginPath();
-    ctx.moveTo(BIRD_RADIUS - 2, 0);
-    ctx.lineTo(BIRD_RADIUS + 10, -3);
-    ctx.lineTo(BIRD_RADIUS + 10, 3);
+    ctx.moveTo(BIRD_RADIUS * 0.55, -BIRD_RADIUS * 0.35);
+    ctx.quadraticCurveTo(BIRD_RADIUS * 1.7, -BIRD_RADIUS * 0.3, BIRD_RADIUS * 1.6, BIRD_RADIUS * 0.05);
+    ctx.quadraticCurveTo(BIRD_RADIUS * 1.5, BIRD_RADIUS * 0.35, BIRD_RADIUS * 0.5, BIRD_RADIUS * 0.15);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+
+    // big duck eye, upper-right of the head
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(BIRD_RADIUS * 0.35, -BIRD_RADIUS * 0.35, BIRD_RADIUS * 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = '#222';
+    ctx.beginPath();
+    ctx.arc(BIRD_RADIUS * 0.45, -BIRD_RADIUS * 0.32, BIRD_RADIUS * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.restore();
   }
 
