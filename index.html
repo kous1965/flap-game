@@ -77,18 +77,118 @@
     padding: 0;
     z-index: 10;
   }
+  #history-btn {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 64px);
+    right: 16px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0,0,0,0.25);
+    color: #fff;
+    font-size: 20px;
+    line-height: 44px;
+    text-align: center;
+    padding: 0;
+    z-index: 10;
+  }
+  #buffs {
+    margin-top: 6px;
+    font-size: 14px;
+    min-height: 18px;
+  }
+  #share-btn {
+    display: none;
+    margin-top: 14px;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #1c5f96;
+    font-weight: 700;
+    font-size: 14px;
+    pointer-events: auto;
+  }
+  #history-panel {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 20;
+    align-items: center;
+    justify-content: center;
+  }
+  #history-card {
+    background: #fff;
+    color: #1c3b6b;
+    width: min(320px, 84vw);
+    max-height: 70vh;
+    border-radius: 16px;
+    padding: 18px;
+    overflow-y: auto;
+    text-shadow: none;
+  }
+  #history-card h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    text-align: center;
+  }
+  #history-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  #history-list li {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 4px;
+    border-bottom: 1px solid #eee;
+    font-size: 14px;
+  }
+  .history-empty {
+    text-align: center;
+    color: #888;
+    justify-content: center !important;
+  }
+  .history-score {
+    font-weight: 700;
+  }
+  .history-date {
+    color: #888;
+  }
+  #history-close {
+    display: block;
+    margin: 14px auto 0;
+    padding: 8px 20px;
+    border: none;
+    border-radius: 16px;
+    background: #1c5f96;
+    color: #fff;
+    font-size: 14px;
+  }
 </style>
 </head>
 <body>
   <canvas id="game"></canvas>
   <button id="mute-btn" aria-label="サウンド切り替え">🔊</button>
+  <button id="history-btn" aria-label="履歴">📜</button>
   <div id="hud">
     <div id="score">0</div>
     <div id="best"></div>
+    <div id="buffs"></div>
   </div>
   <div id="message">
     <h1>タップでスタート</h1>
     <p>画面をタップして飛び続けよう</p>
+    <button id="share-btn">結果をシェア</button>
+  </div>
+  <div id="history-panel">
+    <div id="history-card">
+      <h2>最近のスコア</h2>
+      <ul id="history-list"></ul>
+      <button id="history-close">閉じる</button>
+    </div>
   </div>
 
 <script>
@@ -97,7 +197,13 @@
   const ctx = canvas.getContext('2d');
   const scoreEl = document.getElementById('score');
   const bestEl = document.getElementById('best');
+  const buffsEl = document.getElementById('buffs');
   const messageEl = document.getElementById('message');
+  const shareBtn = document.getElementById('share-btn');
+  const historyBtn = document.getElementById('history-btn');
+  const historyPanel = document.getElementById('history-panel');
+  const historyCloseBtn = document.getElementById('history-close');
+  const historyListEl = document.getElementById('history-list');
 
   let dpr = Math.min(window.devicePixelRatio || 1, 2);
   let W, H;
@@ -243,11 +349,20 @@
       osc.stop(t + 0.13);
     }
 
-    function playScore() {
+    function playScore(pitch) {
+      if (!ctx) return;
+      const p = pitch || 1;
+      const t = ctx.currentTime;
+      tone(660 * p, t, 0.09, 'square', sfxGain, 0.5);
+      tone(990 * p, t + 0.07, 0.12, 'square', sfxGain, 0.5);
+    }
+
+    function playItem() {
       if (!ctx) return;
       const t = ctx.currentTime;
-      tone(660, t, 0.09, 'square', sfxGain, 0.5);
-      tone(990, t + 0.07, 0.12, 'square', sfxGain, 0.5);
+      tone(523.25, t, 0.1, 'square', sfxGain, 0.45);
+      tone(659.25, t + 0.06, 0.1, 'square', sfxGain, 0.45);
+      tone(783.99, t + 0.12, 0.16, 'square', sfxGain, 0.5);
     }
 
     function playDie() {
@@ -297,7 +412,7 @@
       return muted;
     }
 
-    return { ensure, startMusic, playFlap, playScore, playDie, playFall, toggleMute };
+    return { ensure, startMusic, playFlap, playScore, playItem, playDie, playFall, toggleMute };
   })();
 
   const muteBtn = document.getElementById('mute-btn');
@@ -305,6 +420,76 @@
     e.stopPropagation();
     const isMuted = AudioEngine.toggleMute();
     muteBtn.textContent = isMuted ? '🔇' : '🔊';
+  });
+
+  const HISTORY_KEY = 'flap-history';
+  function loadHistory() {
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+  function pushHistory(finalScore) {
+    const history = loadHistory();
+    history.unshift({ score: finalScore, date: new Date().toISOString() });
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 10)));
+  }
+  function formatHistoryDate(iso) {
+    const d = new Date(iso);
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' +
+      String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function renderHistory() {
+    const history = loadHistory();
+    historyListEl.innerHTML = '';
+    if (history.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'まだ記録がありません';
+      li.className = 'history-empty';
+      historyListEl.appendChild(li);
+      return;
+    }
+    history.forEach((entry) => {
+      const li = document.createElement('li');
+      const scoreSpan = document.createElement('span');
+      scoreSpan.className = 'history-score';
+      scoreSpan.textContent = entry.score + '点';
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'history-date';
+      dateSpan.textContent = formatHistoryDate(entry.date);
+      li.appendChild(scoreSpan);
+      li.appendChild(dateSpan);
+      historyListEl.appendChild(li);
+    });
+  }
+  historyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    renderHistory();
+    historyPanel.style.display = 'flex';
+  });
+  historyCloseBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    historyPanel.style.display = 'none';
+  });
+  historyPanel.addEventListener('click', (e) => {
+    if (e.target === historyPanel) historyPanel.style.display = 'none';
+  });
+
+  shareBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const text = 'ダック・フラップでスコア ' + score + ' 点!';
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'ダック・フラップ', text, url: location.href });
+      } catch (err) {
+        // ユーザーがキャンセルした場合は何もしない
+      }
+    } else if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text + ' ' + location.href);
+      shareBtn.textContent = 'コピーしました';
+      setTimeout(() => { shareBtn.textContent = '結果をシェア'; }, 1500);
+    }
   });
 
   const GRAVITY = 1500;
@@ -315,9 +500,14 @@
   const PIPE_SPEED = 160;
   const BIRD_X_RATIO = 0.3;
   const BIRD_RADIUS = 16;
+  const ITEM_RADIUS = 14;
+  const INVINCIBLE_DURATION = 5;
+  const SCORE_BOOST_DURATION = 6;
 
   let state = 'ready'; // ready | playing | dead
-  let bird, pipes, score, groundOffset, elapsedSinceStart;
+  let bird, pipes, items, score, groundOffset, elapsedSinceStart;
+  let invincibleTimer, scoreBoostTimer, comboPopup;
+  let skyTime = 0;
 
   function resetGame() {
     bird = {
@@ -329,10 +519,16 @@
       flapPhase: 0
     };
     pipes = [];
+    items = [];
     score = 0;
     groundOffset = 0;
     elapsedSinceStart = 0;
+    invincibleTimer = 0;
+    scoreBoostTimer = 0;
+    comboPopup = null;
     scoreEl.textContent = '0';
+    shareBtn.style.display = 'none';
+    updateBuffHud();
     let x = W + 100;
     for (let i = 0; i < 5; i++) {
       pipes.push(makePipe(x));
@@ -343,7 +539,22 @@
   function makePipe(x) {
     const margin = 80;
     const gapCenter = margin + Math.random() * (H - margin * 2 - 120);
-    return { x, gapCenter, passed: false };
+    const moving = Math.random() < 0.3;
+    const pipe = {
+      x,
+      gapCenter,
+      baseGapCenter: gapCenter,
+      passed: false,
+      moving,
+      moveAmplitude: moving ? 35 + Math.random() * 35 : 0,
+      moveSpeed: moving ? 0.8 + Math.random() * 0.7 : 0,
+      movePhase: Math.random() * Math.PI * 2
+    };
+    if (!moving && Math.random() < 0.3) {
+      const type = Math.random() < 0.5 ? 'star' : 'coin';
+      items.push({ x: x + PIPE_WIDTH / 2, y: gapCenter, type, collected: false });
+    }
+    return pipe;
   }
 
   function flap() {
@@ -375,10 +586,17 @@
 
   function update(dt) {
     groundOffset += PIPE_SPEED * dt;
+    skyTime += dt;
+    if (comboPopup) {
+      comboPopup.timer -= dt;
+      if (comboPopup.timer <= 0) comboPopup = null;
+    }
 
     if (state !== 'playing') return;
 
     elapsedSinceStart += dt;
+    invincibleTimer = Math.max(0, invincibleTimer - dt);
+    scoreBoostTimer = Math.max(0, scoreBoostTimer - dt);
     const wasRising = bird.vy < 0;
     bird.vy += GRAVITY * dt;
     bird.y += bird.vy * dt;
@@ -413,15 +631,26 @@
     for (const pipe of pipes) {
       pipe.x -= PIPE_SPEED * dt;
 
+      if (pipe.moving) {
+        const raw = pipe.baseGapCenter + Math.sin(elapsedSinceStart * pipe.moveSpeed + pipe.movePhase) * pipe.moveAmplitude;
+        const minCenter = PIPE_GAP / 2 + 30;
+        const maxCenter = groundY - PIPE_GAP / 2 - 30;
+        pipe.gapCenter = Math.max(minCenter, Math.min(maxCenter, raw));
+      }
+
       if (!pipe.passed && pipe.x + PIPE_WIDTH < birdX) {
         pipe.passed = true;
-        score++;
+        const gained = scoreBoostTimer > 0 ? 2 : 1;
+        score += gained;
         scoreEl.textContent = String(score);
-        AudioEngine.playScore();
+        AudioEngine.playScore(1 + Math.min(score, 20) * 0.025);
+        if (score % 5 === 0) {
+          comboPopup = { text: score + ' COMBO!', timer: 1.1, maxTimer: 1.1 };
+        }
       }
 
       const withinX = birdX + BIRD_RADIUS > pipe.x && birdX - BIRD_RADIUS < pipe.x + PIPE_WIDTH;
-      if (withinX) {
+      if (withinX && invincibleTimer <= 0) {
         const gapTop = pipe.gapCenter - PIPE_GAP / 2;
         const gapBottom = pipe.gapCenter + PIPE_GAP / 2;
         if (bird.y - BIRD_RADIUS < gapTop || bird.y + BIRD_RADIUS > gapBottom) {
@@ -430,11 +659,41 @@
       }
     }
 
+    for (let i = items.length - 1; i >= 0; i--) {
+      const item = items[i];
+      item.x -= PIPE_SPEED * dt;
+      if (item.x < -30) {
+        items.splice(i, 1);
+        continue;
+      }
+      const dx = item.x - birdX;
+      const dy = item.y - bird.y;
+      if (Math.hypot(dx, dy) < ITEM_RADIUS + BIRD_RADIUS * 0.9) {
+        items.splice(i, 1);
+        AudioEngine.playItem();
+        if (item.type === 'star') {
+          invincibleTimer = INVINCIBLE_DURATION;
+        } else {
+          scoreBoostTimer = SCORE_BOOST_DURATION;
+        }
+        updateBuffHud();
+      }
+    }
+
     if (pipes.length && pipes[0].x + PIPE_WIDTH < -20) {
       pipes.shift();
       const lastX = pipes[pipes.length - 1].x;
       pipes.push(makePipe(lastX + PIPE_SPACING));
     }
+
+    updateBuffHud();
+  }
+
+  function updateBuffHud() {
+    const parts = [];
+    if (invincibleTimer > 0) parts.push('⭐無敵 ' + invincibleTimer.toFixed(1) + 's');
+    if (scoreBoostTimer > 0) parts.push('💰2倍 ' + scoreBoostTimer.toFixed(1) + 's');
+    buffsEl.textContent = parts.join('   ');
   }
 
   function die() {
@@ -446,17 +705,69 @@
       localStorage.setItem(BEST_KEY, String(best));
     }
     bestEl.textContent = 'ベスト: ' + best;
+    pushHistory(score);
     messageEl.querySelector('h1').textContent = 'ゲームオーバー';
     messageEl.querySelector('p').textContent = 'スコア ' + score + ' ・ タップでリトライ';
     messageEl.style.display = 'block';
+    shareBtn.style.display = 'inline-block';
+  }
+
+  const CYCLE_SECONDS = 45;
+  const SKY_STOPS = [
+    { top: [255, 179, 133], bottom: [255, 225, 194] }, // 朝焼け
+    { top: [78, 192, 202], bottom: [143, 224, 230] },  // 昼
+    { top: [255, 126, 95], bottom: [254, 180, 123] },  // 夕焼け
+    { top: [11, 26, 58], bottom: [28, 59, 107] }       // 夜
+  ];
+  const STAR_FIELD = Array.from({ length: 40 }, () => ({
+    x: Math.random(),
+    y: Math.random() * 0.6,
+    r: 0.6 + Math.random() * 1.2,
+    tw: Math.random() * Math.PI * 2
+  }));
+
+  function lerpNum(a, b, t) { return a + (b - a) * t; }
+  function mixColor(a, b, t) {
+    return [
+      Math.round(lerpNum(a[0], b[0], t)),
+      Math.round(lerpNum(a[1], b[1], t)),
+      Math.round(lerpNum(a[2], b[2], t))
+    ];
+  }
+  function rgbCss(c) { return 'rgb(' + c[0] + ',' + c[1] + ',' + c[2] + ')'; }
+
+  function getSky(time) {
+    const n = SKY_STOPS.length;
+    const cyclePos = (time % CYCLE_SECONDS) / CYCLE_SECONDS;
+    const scaled = cyclePos * n;
+    const i0 = Math.floor(scaled) % n;
+    const i1 = (i0 + 1) % n;
+    const t = scaled - Math.floor(scaled);
+    const top = mixColor(SKY_STOPS[i0].top, SKY_STOPS[i1].top, t);
+    const bottom = mixColor(SKY_STOPS[i0].bottom, SKY_STOPS[i1].bottom, t);
+    const nightFactor = Math.max(0, Math.pow(Math.cos((cyclePos - 0.75) * Math.PI * 2), 3));
+    return { top, bottom, nightFactor };
   }
 
   function drawBackground() {
+    const sky = getSky(skyTime);
     const grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, '#4ec0ca');
-    grad.addColorStop(1, '#8fe0e6');
+    grad.addColorStop(0, rgbCss(sky.top));
+    grad.addColorStop(1, rgbCss(sky.bottom));
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
+
+    if (sky.nightFactor > 0.02) {
+      for (const star of STAR_FIELD) {
+        const twinkle = 0.5 + 0.5 * Math.sin(skyTime * 2 + star.tw);
+        ctx.globalAlpha = sky.nightFactor * twinkle;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(star.x * W, star.y * H, star.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
   }
 
   let brickPatternCache = null;
@@ -509,6 +820,65 @@
       ctx.strokeRect(pipe.x, 0, PIPE_WIDTH, gapTop);
       ctx.strokeRect(pipe.x, gapBottom, PIPE_WIDTH, H - gapBottom);
     }
+  }
+
+  function drawStarShape(cx, cy, outerR, innerR, points, fill, stroke) {
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < points * 2; i++) {
+      const r = i % 2 === 0 ? outerR : innerR;
+      const angle = (Math.PI / points) * i - Math.PI / 2;
+      const x = cx + Math.cos(angle) * r;
+      const y = cy + Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  function drawItems() {
+    for (const item of items) {
+      const bob = Math.sin(skyTime * 4 + item.x * 0.05) * 3;
+      ctx.save();
+      ctx.translate(item.x, item.y + bob);
+      if (item.type === 'star') {
+        drawStarShape(0, 0, ITEM_RADIUS, ITEM_RADIUS * 0.45, 5, '#ffe066', '#e0a800');
+      } else {
+        ctx.fillStyle = '#ffd447';
+        ctx.strokeStyle = '#c98f14';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, ITEM_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = '#a5690a';
+        ctx.font = 'bold 14px -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('2x', 0, 1);
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawComboPopup() {
+    if (!comboPopup || comboPopup.timer <= 0) return;
+    const t = comboPopup.timer / comboPopup.maxTimer;
+    const alpha = Math.min(1, t * 1.5);
+    const riseOffset = (1 - t) * 30;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+    ctx.lineWidth = 4;
+    ctx.font = 'bold 30px -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.strokeText(comboPopup.text, W / 2, H * 0.3 - riseOffset);
+    ctx.fillText(comboPopup.text, W / 2, H * 0.3 - riseOffset);
+    ctx.restore();
   }
 
   function waveY(x, groundY, phase) {
@@ -564,6 +934,17 @@
     ctx.save();
     ctx.translate(birdX, bird.y);
     ctx.rotate(bird.rotation);
+
+    if (invincibleTimer > 0) {
+      const pulse = 0.6 + 0.4 * Math.sin(skyTime * 10);
+      ctx.save();
+      ctx.globalAlpha = 0.35 * pulse;
+      ctx.fillStyle = '#7fe8ff';
+      ctx.beginPath();
+      ctx.arc(0, 0, BIRD_RADIUS * 1.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
 
     // rubber-duck-style tail/wing bump at the back
     ctx.fillStyle = '#f5c02e';
@@ -627,13 +1008,15 @@
   function draw() {
     drawBackground();
     drawPipes();
+    drawItems();
     drawGround();
     drawBird();
+    drawComboPopup();
   }
 
   let lastTime = performance.now();
   function loop(now) {
-    const dt = Math.min(0.033, (now - lastTime) / 1000);
+    const dt = Math.max(0, Math.min(0.033, (now - lastTime) / 1000));
     lastTime = now;
     update(dt);
     draw();
