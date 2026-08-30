@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>フラップ飛行</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #4ec0ca;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    font-family: -apple-system, "Hiragino Kaku Gothic ProN", sans-serif;
+  }
+  #game {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  #hud {
+    position: fixed;
+    top: env(safe-area-inset-top, 0px);
+    left: 0;
+    right: 0;
+    text-align: center;
+    pointer-events: none;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+  }
+  #score {
+    margin-top: 16px;
+    font-size: 48px;
+    font-weight: 700;
+  }
+  #message {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    color: #fff;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    pointer-events: none;
+  }
+  #message h1 {
+    font-size: 28px;
+    margin: 0 0 8px;
+  }
+  #message p {
+    font-size: 16px;
+    margin: 0;
+    opacity: 0.9;
+  }
+  #best {
+    font-size: 14px;
+    opacity: 0.85;
+    margin-top: 4px;
+  }
+  #mute-btn {
+    position: fixed;
+    top: calc(env(safe-area-inset-top, 0px) + 12px);
+    right: 16px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(0,0,0,0.25);
+    color: #fff;
+    font-size: 20px;
+    line-height: 44px;
+    text-align: center;
+    padding: 0;
+    z-index: 10;
+  }
+</style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <button id="mute-btn" aria-label="サウンド切り替え">🔊</button>
+  <div id="hud">
+    <div id="score">0</div>
+    <div id="best"></div>
+  </div>
+  <div id="message">
+    <h1>タップでスタート</h1>
+    <p>画面をタップして飛び続けよう</p>
+  </div>
+
+<script>
+(function () {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  const messageEl = document.getElementById('message');
+
+  let dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let W, H;
+
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const BEST_KEY = 'flap-best-score';
+  let best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10);
+  bestEl.textContent = 'ベスト: ' + best;
+
+  const AudioEngine = (() => {
+    let ctx = null;
+    let masterGain = null;
+    let musicGain = null;
+    let sfxGain = null;
+    let muted = false;
+    let musicTimer = null;
+    let next16thTime = 0;
+    let step = 0;
+    const bpm = 124;
+    const stepDur = 60 / bpm / 4;
+
+    // YMO(テクノポリス/ライディーン)的な高速アルペジオをオマージュした自作フレーズ
+    const arpNotes = [220.00, 261.63, 329.63, 392.00, 440.00, 392.00, 329.63, 261.63];
+    const bassNotes = [110.00, null, null, null, 110.00, null, 130.81, null,
+                        110.00, null, null, null, 98.00, null, null, null];
+
+    function ensure() {
+      if (ctx) {
+        if (ctx.state === 'suspended') ctx.resume();
+        return;
+      }
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      masterGain = ctx.createGain();
+      masterGain.gain.value = 0.7;
+      masterGain.connect(ctx.destination);
+
+      musicGain = ctx.createGain();
+      musicGain.gain.value = 0.22;
+      musicGain.connect(masterGain);
+
+      sfxGain = ctx.createGain();
+      sfxGain.gain.value = 0.9;
+      sfxGain.connect(masterGain);
+
+      if (ctx.state === 'suspended') ctx.resume();
+      // iOSは無音バッファを一度再生しないと出力が完全に起きないことがあるための保険
+      const unlockBuffer = ctx.createBuffer(1, 1, 22050);
+      const unlockSource = ctx.createBufferSource();
+      unlockSource.buffer = unlockBuffer;
+      unlockSource.connect(ctx.destination);
+      unlockSource.start(0);
+    }
+
+    function tone(freq, startTime, duration, type, gainNode, peak) {
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      env.gain.setValueAtTime(0, startTime);
+      env.gain.linearRampToValueAtTime(peak, startTime + 0.008);
+      env.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      osc.connect(env);
+      env.connect(gainNode);
+      osc.start(startTime);
+      osc.stop(startTime + duration + 0.02);
+    }
+
+    function noiseBurst(startTime, duration, peak, gainNode) {
+      const bufferSize = Math.max(1, Math.floor(ctx.sampleRate * duration));
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 6000;
+      const env = ctx.createGain();
+      env.gain.setValueAtTime(peak, startTime);
+      env.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+      src.connect(filter);
+      filter.connect(env);
+      env.connect(gainNode);
+      src.start(startTime);
+      src.stop(startTime + duration);
+    }
+
+    function scheduleStep(time) {
+      const arpFreq = arpNotes[step % arpNotes.length];
+      tone(arpFreq, time, stepDur * 0.9, 'square', musicGain, 0.5);
+
+      const bassFreq = bassNotes[step % bassNotes.length];
+      if (bassFreq) {
+        tone(bassFreq, time, stepDur * 3.5, 'triangle', musicGain, 0.9);
+      }
+
+      if (step % 2 === 0) {
+        noiseBurst(time, 0.03, 0.15, musicGain);
+      }
+      step++;
+    }
+
+    function schedulerLoop() {
+      while (next16thTime < ctx.currentTime + 0.12) {
+        scheduleStep(next16thTime);
+        next16thTime += stepDur;
+      }
+    }
+
+    function startMusic() {
+      if (!ctx || musicTimer) return;
+      step = 0;
+      next16thTime = ctx.currentTime + 0.05;
+      schedulerLoop();
+      musicTimer = setInterval(schedulerLoop, 25);
+    }
+
+    function playFlap() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(320, t);
+      osc.frequency.exponentialRampToValueAtTime(680, t + 0.09);
+      env.gain.setValueAtTime(0.0001, t);
+      env.gain.linearRampToValueAtTime(0.6, t + 0.01);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      osc.connect(env);
+      env.connect(sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.13);
+    }
+
+    function playScore() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      tone(660, t, 0.09, 'square', sfxGain, 0.5);
+      tone(990, t + 0.07, 0.12, 'square', sfxGain, 0.5);
+    }
+
+    function playDie() {
+      if (!ctx) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const env = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(300, t);
+      osc.frequency.exponentialRampToValueAtTime(60, t + 0.4);
+      env.gain.setValueAtTime(0.5, t);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      osc.connect(env);
+      env.connect(sfxGain);
+      osc.start(t);
+      osc.stop(t + 0.46);
+    }
+
+    function toggleMute() {
+      ensure();
+      muted = !muted;
+      masterGain.gain.setTargetAtTime(muted ? 0 : 0.7, ctx.currentTime, 0.01);
+      return muted;
+    }
+
+    return { ensure, startMusic, playFlap, playScore, playDie, toggleMute };
+  })();
+
+  const muteBtn = document.getElementById('mute-btn');
+  muteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isMuted = AudioEngine.toggleMute();
+    muteBtn.textContent = isMuted ? '🔇' : '🔊';
+  });
+
+  const GRAVITY = 1500;
+  const FLAP_VELOCITY = -430;
+  const PIPE_GAP = 190;
+  const PIPE_WIDTH = 70;
+  const PIPE_SPACING = 260;
+  const PIPE_SPEED = 160;
+  const BIRD_X_RATIO = 0.3;
+  const BIRD_RADIUS = 16;
+
+  let state = 'ready'; // ready | playing | dead
+  let bird, pipes, score, groundOffset, elapsedSinceStart;
+
+  function resetGame() {
+    bird = {
+      y: H * 0.4,
+      vy: 0,
+      rotation: 0
+    };
+    pipes = [];
+    score = 0;
+    groundOffset = 0;
+    elapsedSinceStart = 0;
+    scoreEl.textContent = '0';
+    let x = W + 100;
+    for (let i = 0; i < 5; i++) {
+      pipes.push(makePipe(x));
+      x += PIPE_SPACING;
+    }
+  }
+
+  function makePipe(x) {
+    const margin = 80;
+    const gapCenter = margin + Math.random() * (H - margin * 2 - 120);
+    return { x, gapCenter, passed: false };
+  }
+
+  function flap() {
+    if (state === 'ready') {
+      AudioEngine.ensure();
+      AudioEngine.startMusic();
+      state = 'playing';
+      messageEl.style.display = 'none';
+      bird.vy = FLAP_VELOCITY;
+      AudioEngine.playFlap();
+    } else if (state === 'playing') {
+      bird.vy = FLAP_VELOCITY;
+      AudioEngine.playFlap();
+    } else if (state === 'dead') {
+      resetGame();
+      state = 'ready';
+      messageEl.querySelector('h1').textContent = 'タップでスタート';
+      messageEl.querySelector('p').textContent = '画面をタップして飛び続けよう';
+      messageEl.style.display = 'block';
+    }
+  }
+
+  function onPointerDown(e) {
+    e.preventDefault();
+    flap();
+  }
+  canvas.addEventListener('touchstart', onPointerDown, { passive: false });
+  canvas.addEventListener('mousedown', onPointerDown);
+
+  function update(dt) {
+    groundOffset = (groundOffset + PIPE_SPEED * dt) % 40;
+
+    if (state !== 'playing') return;
+
+    elapsedSinceStart += dt;
+    bird.vy += GRAVITY * dt;
+    bird.y += bird.vy * dt;
+    bird.rotation = Math.max(-0.5, Math.min(1.2, bird.vy / 600));
+
+    const groundY = H - 40;
+    if (bird.y + BIRD_RADIUS > groundY) {
+      bird.y = groundY - BIRD_RADIUS;
+      die();
+    }
+    if (bird.y - BIRD_RADIUS < 0) {
+      bird.y = BIRD_RADIUS;
+      bird.vy = 0;
+    }
+
+    const birdX = W * BIRD_X_RATIO;
+
+    for (const pipe of pipes) {
+      pipe.x -= PIPE_SPEED * dt;
+
+      if (!pipe.passed && pipe.x + PIPE_WIDTH < birdX) {
+        pipe.passed = true;
+        score++;
+        scoreEl.textContent = String(score);
+        AudioEngine.playScore();
+      }
+
+      const withinX = birdX + BIRD_RADIUS > pipe.x && birdX - BIRD_RADIUS < pipe.x + PIPE_WIDTH;
+      if (withinX) {
+        const gapTop = pipe.gapCenter - PIPE_GAP / 2;
+        const gapBottom = pipe.gapCenter + PIPE_GAP / 2;
+        if (bird.y - BIRD_RADIUS < gapTop || bird.y + BIRD_RADIUS > gapBottom) {
+          die();
+        }
+      }
+    }
+
+    if (pipes.length && pipes[0].x + PIPE_WIDTH < -20) {
+      pipes.shift();
+      const lastX = pipes[pipes.length - 1].x;
+      pipes.push(makePipe(lastX + PIPE_SPACING));
+    }
+  }
+
+  function die() {
+    if (state !== 'playing') return;
+    state = 'dead';
+    AudioEngine.playDie();
+    if (score > best) {
+      best = score;
+      localStorage.setItem(BEST_KEY, String(best));
+    }
+    bestEl.textContent = 'ベスト: ' + best;
+    messageEl.querySelector('h1').textContent = 'ゲームオーバー';
+    messageEl.querySelector('p').textContent = 'スコア ' + score + ' ・ タップでリトライ';
+    messageEl.style.display = 'block';
+  }
+
+  function drawBackground() {
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#4ec0ca');
+    grad.addColorStop(1, '#8fe0e6');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawPipes() {
+    ctx.fillStyle = '#5cc95c';
+    ctx.strokeStyle = '#3a9c3a';
+    ctx.lineWidth = 3;
+    for (const pipe of pipes) {
+      const gapTop = pipe.gapCenter - PIPE_GAP / 2;
+      const gapBottom = pipe.gapCenter + PIPE_GAP / 2;
+      ctx.fillRect(pipe.x, 0, PIPE_WIDTH, gapTop);
+      ctx.strokeRect(pipe.x, 0, PIPE_WIDTH, gapTop);
+      ctx.fillRect(pipe.x, gapBottom, PIPE_WIDTH, H - gapBottom);
+      ctx.strokeRect(pipe.x, gapBottom, PIPE_WIDTH, H - gapBottom);
+    }
+  }
+
+  function drawGround() {
+    const groundY = H - 40;
+    ctx.fillStyle = '#ded29b';
+    ctx.fillRect(0, groundY, W, 40);
+    ctx.fillStyle = '#c9bb7d';
+    for (let x = -groundOffset; x < W; x += 40) {
+      ctx.fillRect(x, groundY, 20, 8);
+    }
+  }
+
+  function drawBird() {
+    const birdX = W * BIRD_X_RATIO;
+    ctx.save();
+    ctx.translate(birdX, bird.y);
+    ctx.rotate(bird.rotation);
+    ctx.fillStyle = '#ffd23f';
+    ctx.strokeStyle = '#e0a800';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#333';
+    ctx.beginPath();
+    ctx.arc(6, -4, 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#ff8c1a';
+    ctx.beginPath();
+    ctx.moveTo(BIRD_RADIUS - 2, 0);
+    ctx.lineTo(BIRD_RADIUS + 10, -3);
+    ctx.lineTo(BIRD_RADIUS + 10, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function draw() {
+    drawBackground();
+    drawPipes();
+    drawGround();
+    drawBird();
+  }
+
+  let lastTime = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - lastTime) / 1000);
+    lastTime = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  resetGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
