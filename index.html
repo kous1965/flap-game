@@ -333,52 +333,63 @@
     }
 
     function playFlap() {
+      // 8bit風ジャンプ音: 素早いピッチ上昇の後、少しだけ跳ねて落ち着く
       if (!ctx) return;
       const t = ctx.currentTime;
       const osc = ctx.createOscillator();
       const env = ctx.createGain();
       osc.type = 'square';
-      osc.frequency.setValueAtTime(320, t);
-      osc.frequency.exponentialRampToValueAtTime(680, t + 0.09);
+      osc.frequency.setValueAtTime(280, t);
+      osc.frequency.exponentialRampToValueAtTime(760, t + 0.1);
+      osc.frequency.exponentialRampToValueAtTime(600, t + 0.16);
       env.gain.setValueAtTime(0.0001, t);
-      env.gain.linearRampToValueAtTime(0.6, t + 0.01);
-      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      env.gain.linearRampToValueAtTime(0.55, t + 0.012);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.19);
       osc.connect(env);
       env.connect(sfxGain);
       osc.start(t);
-      osc.stop(t + 0.13);
+      osc.stop(t + 0.2);
     }
 
     function playScore(pitch) {
+      // 8bit風コイン音: 2連の高音+きらめく倍音
       if (!ctx) return;
       const p = pitch || 1;
       const t = ctx.currentTime;
-      tone(660 * p, t, 0.09, 'square', sfxGain, 0.5);
-      tone(990 * p, t + 0.07, 0.12, 'square', sfxGain, 0.5);
+      tone(987.77 * p, t, 0.09, 'square', sfxGain, 0.42);
+      tone(1318.51 * p, t + 0.05, 0.17, 'square', sfxGain, 0.48);
+      tone(2637.02 * p, t + 0.05, 0.1, 'triangle', sfxGain, 0.12);
     }
 
     function playItem() {
+      // 8bit風パワーアップ音: 上昇するファンファーレ
       if (!ctx) return;
       const t = ctx.currentTime;
-      tone(523.25, t, 0.1, 'square', sfxGain, 0.45);
-      tone(659.25, t + 0.06, 0.1, 'square', sfxGain, 0.45);
-      tone(783.99, t + 0.12, 0.16, 'square', sfxGain, 0.5);
+      const notes = [523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98];
+      notes.forEach((freq, i) => {
+        tone(freq, t + i * 0.055, 0.14, 'square', sfxGain, 0.4);
+      });
     }
 
     function playDie() {
+      // 8bit風ゲームオーバー音: 下降する短いメロディ+低音の余韻
       if (!ctx) return;
       const t = ctx.currentTime;
+      const notes = [392.00, 349.23, 293.66, 196.00];
+      notes.forEach((freq, i) => {
+        tone(freq, t + i * 0.13, 0.17, 'square', sfxGain, 0.45);
+      });
       const osc = ctx.createOscillator();
       const env = ctx.createGain();
-      osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(300, t);
-      osc.frequency.exponentialRampToValueAtTime(60, t + 0.4);
-      env.gain.setValueAtTime(0.5, t);
-      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.45);
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(160, t + 0.5);
+      osc.frequency.exponentialRampToValueAtTime(50, t + 0.9);
+      env.gain.setValueAtTime(0.4, t + 0.5);
+      env.gain.exponentialRampToValueAtTime(0.0001, t + 0.95);
       osc.connect(env);
       env.connect(sfxGain);
-      osc.start(t);
-      osc.stop(t + 0.46);
+      osc.start(t + 0.5);
+      osc.stop(t + 1.0);
     }
 
     function playFall() {
